@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-from os.path import abspath
+from os.path import abspath, basename
+from utils import *
     
 def build_gaussian_filter(size: int, sigma: float = 1):
     out = np.zeros((size, size))
@@ -130,14 +131,38 @@ def conv(img, filter):
 
 
 if __name__ == "__main__":
-    img = load_picture(abspath("./cv-parktikum/demo-img.jpg"))
-    out = conv(img, build_gaussian_filter(5, 1.4))
-    sobel, theta = sobel_apply(out)
-    supp = non_maximum_suppression(sobel, theta)
-    Th = supp.max() * 0.1
-    Tl = Th * 0.05
-    hysteresis = hysteresis_thresholding(supp, Tl, Th)
-    imgs = [img, out, supp, hysteresis]
-    show_picture(imgs)
+    # img = load_picture(abspath("./cv-parktikum/demo-img.jpg"))
+    # out = conv(img, build_gaussian_filter(5, 1.4))
+    # sobel, theta = sobel_apply(out)
+    # supp = non_maximum_suppression(sobel, theta)
+    # Th = supp.max() * 0.1
+    # Tl = Th * 0.05
+    # hysteresis = hysteresis_thresholding(supp, Tl, Th)
+    # imgs = [img, out, supp, hysteresis]
+    # show_picture(imgs)
+
+    paths = get_image_paths("./cv-parktikum/BSDS500-master/BSDS500/data/images/test")
+    results = {}
+    for i, path in enumerate(paths):
+        img = load_picture(path)
+        out = conv(img, build_gaussian_filter(5, 1))
+        sobel, theta = sobel_apply(out)
+        supp = non_maximum_suppression(sobel, theta)
+        Th = supp.max() * 0.1
+        Tl = Th * 0.05
+        hystersis = hysteresis_thresholding(supp, Tl, Th)
+        results[basename(path).split('.')[0]] = hystersis
+        if i % 10 == 0:
+            print(f"{i/len(paths) * 100} percent done loading results")
+
+    contours = load_contours("./cv-parktikum/BSDS500-master/BSDS500/data/groundTruth/test/")
+    print("Done loading contours")
+    diffs, avg = calc_diffs(results, contours)
+    print("Diffs:")
+    print(diffs)
+    print("#"*100)
+    print(f"Avg: {avg}")
+
+
 
     
