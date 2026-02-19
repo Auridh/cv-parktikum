@@ -100,37 +100,6 @@ def hysteresis_thresholding(img, Tl = 20, Th = 60):
 
     return out
 
-
-def load_picture(path: str):
-    img = mpimg.imread(path)
-    r, g, b = img[:,:,0], img[:,:,1], img[:,:,2] # Source: https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.convert
-    grey = 0.2989 * r + 0.5870 * g + 0.1140 * b
-    return grey
-
-def show_picture(imgs, dim1=2, dim2=2):
-    plt.figure(figsize=(20,40))
-    for i, img in enumerate(imgs):
-        plt.subplot(dim1, dim2, i+1)
-        plt.imshow(img, 'gray')
-        # plt.tight_layout()
-    plt.show()
-
-def conv(img, filter):
-    filter_size = len(filter) // 2
-    out = np.ndarray(img.shape)
-    img = np.pad(img, filter_size)
-    Y, X = img.shape
-    for y in range(filter_size, Y - filter_size, 1):
-        for x in range(filter_size, X - filter_size, 1):
-
-            curr = 0
-            for y_f in range(len(filter)):
-                for x_f in range(len(filter)):
-                    curr += img[y + (y_f - filter_size)][x + (x_f - filter_size)] * filter[y_f][x_f]
-            out[y-filter_size][x-filter_size] = curr
-    return out
-
-
 if __name__ == "__main__":
     # img = load_picture(abspath("./cv-parktikum/demo-img.jpg"))
     # out = conv(img, build_gaussian_filter(5, 1.4))
@@ -155,8 +124,8 @@ if __name__ == "__main__":
             Tl = Th * 0.05
             hystersis = hysteresis_thresholding(supp, Tl, Th)
             results[basename(path).split('.')[0]] = hystersis
-            if i % 10 == 0:
-                print(f"{i/len(paths) * 100} percent done loading results")
+            # if i % 10 == 0:
+            #     print(f"{i/len(paths) * 100} percent done loading results")
             bar()
 
     contours = load_contours("./cv-parktikum/BSDS500-master/BSDS500/data/groundTruth/test/")

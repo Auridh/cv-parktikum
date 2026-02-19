@@ -36,8 +36,21 @@ def get_image_paths(basePath):
         for file in files:
             if file.endswith('.jpg'):
                 paths.append(join(basePath, file))
-
     return paths
+
+def load_picture(path: str):
+    img = mpimg.imread(path)
+    r, g, b = img[:,:,0], img[:,:,1], img[:,:,2] # Source: https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.convert
+    grey = 0.2989 * r + 0.5870 * g + 0.1140 * b
+    return grey
+
+def show_picture(imgs, dim1=2, dim2=2):
+    plt.figure(figsize=(20,40))
+    for i, img in enumerate(imgs):
+        plt.subplot(dim1, dim2, i+1)
+        plt.imshow(img, 'gray')
+        # plt.tight_layout()
+    plt.show()
 
 def save_contours(contours : dict, savePath, num = 0):
     savePath = abspath(savePath)
@@ -81,6 +94,22 @@ def calc_diffs(tests: dict, ground_truth: dict):
         out[testname] = percent
     avg = avg / len(out)
     return out, avg
+
+def conv(img, filter):
+    filter_size = len(filter) // 2
+    out = np.ndarray(img.shape)
+    img = np.pad(img, filter_size)
+    Y, X = img.shape
+    for y in range(filter_size, Y - filter_size, 1):
+        for x in range(filter_size, X - filter_size, 1):
+
+            curr = 0
+            for y_f in range(len(filter)):
+                for x_f in range(len(filter)):
+                    curr += img[y + (y_f - filter_size)][x + (x_f - filter_size)] * filter[y_f][x_f]
+            out[y-filter_size][x-filter_size] = curr
+    return out
+
 
 
                 
