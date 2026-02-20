@@ -149,7 +149,6 @@ def evaluate(model, loader, threshold = 0.5, save_path = None):
                 H, W = shape
                 pred_img = predictions.cpu().numpy().reshape(H, W)
                 pred_img = (pred_img * 255).astype(np.uint8)
-                print(file)
                 Image.fromarray(pred_img).save(os.path.join(save_path, f"pred_{file}"))
 
     return sum(f1_scores) / len(f1_scores)
@@ -210,22 +209,25 @@ def train_model(model, train_loader, val_loader, epochs=10, learning_rate = 0.00
 if __name__ == "__main__":
     # hardware acceleration if available
     device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
-    path = "./BSDS500-master/BSDS500/data"
+    in_path = "./BSDS500-master/BSDS500/data"
+    out_path = "./output"
 
     # get path from cmd
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
-       path = sys.argv[1] 
+        in_path = sys.argv[1]
+    if len(sys.argv) > 2:
+        out_path = sys.argv[2]
 
     # all datasets
     train_dataset = EdgeDataset(
-        os.path.join(path, "images", "train"),
-        os.path.join(path, "groundTruth", "train"))
+        os.path.join(in_path, "images", "train"),
+        os.path.join(in_path, "groundTruth", "train"))
     val_dataset = EdgeDataset(
-        os.path.join(path, "images", "val"),
-        os.path.join(path, "groundTruth", "val"))
+        os.path.join(in_path, "images", "val"),
+        os.path.join(in_path, "groundTruth", "val"))
     test_dataset = EdgeDataset(
-        os.path.join(path, "images", "test"),
-        os.path.join(path, "groundTruth", "test"))
+        os.path.join(in_path, "images", "test"),
+        os.path.join(in_path, "groundTruth", "test"))
 
     # shuffle??
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
@@ -239,5 +241,5 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load("best_model.pt"))
 
     # evaluate our model
-    test_f1 = evaluate(model, test_loader, threshold=0.5, save_path="./output")
+    test_f1 = evaluate(model, test_loader, threshold=0.5, save_path=out_path)
     print("Final Test F1:", test_f1)
