@@ -14,7 +14,7 @@ def feature_extraction(file):
     # Load image this time with the direct pillow function
     # convert('L') converts to grayscale
     img = Image.open(file).convert("L")
-    # this could be better, because smaller values are commonly better for network training???? 
+    # this could be better, because smaller values are commonly better for network training????
     img = np.array(img) / 255.0
     H, W = img.shape
     # pytorch often expects shapes in the form (N, C, H, W)
@@ -27,34 +27,58 @@ def feature_extraction(file):
     img_tensor = torch.from_numpy(img).float().unsqueeze(0).unsqueeze(0).to(device)
 
     # Sobel strength
-    sobel_x = torch.tensor(
-                  [[-1, 0, 1],
-                   [-2, 0, 2],
-                   [-1, 0, 1]],
-                  dtype=torch.float32
-              ).unsqueeze(0).unsqueeze(0).to(device)
-    sobel_y = torch.tensor(
-                  [[-1, -2, -1],
-                   [ 0,  0,  0],
-                   [ 1,  2,  1]],
-                  dtype=torch.float32
-              ).unsqueeze(0).unsqueeze(0).to(device)
+    sobel_x = (
+        torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
+        .unsqueeze(0)
+        .unsqueeze(0)
+        .to(device)
+    )
+    sobel_y = (
+        torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
+        .unsqueeze(0)
+        .unsqueeze(0)
+        .to(device)
+    )
 
     Gx = F.conv2d(img_tensor, sobel_x, padding=1)
     Gy = F.conv2d(img_tensor, sobel_y, padding=1)
-    
+
     # it could be necessary to add a small factor to avoid null division on back propagation
     # like + 1e-8
     strength = torch.sqrt(Gx**2 + Gy**2)
     strength = strength / strength.max()
 
+    # create two features each containing the normalized x or y coordinate
+    x_coord = []
+    y_coord = []
+    for h in range(H):
+        x_row = []
+        y_row = []
+        y_entry = h / H
+        for w in range(W):
+            x_row.append(w / W)
+            y_row.append(y_entry)
+        x_coord.append(x_row)
+        y_coord.append(y_row)
+
+    x_coord = (
+        torch.tensor(x_coord, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
+    )
+    y_coord = (
+        torch.tensor(y_coord, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
+    )
+
     # first reorder the tensor with permute then reshape/flatten it
     # (1,1,H,W) -> (1,H,W,1) -> (H*W,1)
     # each row is one pixel
     # each column is one feature
-    features = strength.permute(0,2,3,1).reshape(-1, 1)
-    
+    strength = strength.permute(0, 2, 3, 1).reshape(-1, 1)
+    x_coord = x_coord.permute(0, 2, 3, 1).reshape(-1, 1)
+    y_coord = y_coord.permute(0, 2, 3, 1).reshape(-1, 1)
+    features = torch.cat((strength, x_coord, y_coord), 1)
+
     return features, (H, W)
+
 
 def label_extraction(file):
     # Load groundTruths
@@ -65,16 +89,17 @@ def label_extraction(file):
 
     boundaries = []
     for i in range(r):
-        boundary = mu[0,i]["Boundaries"][0,0]
+        boundary = mu[0, i]["Boundaries"][0, 0]
         boundary = np.array(boundary)
         boundaries.append(boundary)
 
     avg_boundary = np.mean(boundaries, axis=0)
     # only haven true and false for edges simplifies the rest of the model
     binary_labels = (avg_boundary > 0.5).astype(np.float32)
-    labels = torch.from_numpy(binary_labels).reshape(-1,1).to(device)
+    labels = torch.from_numpy(binary_labels).reshape(-1, 1).to(device)
 
     return labels
+
 
 class EdgeDataset(Dataset):
     def __init__(self, train_path, test_path):
@@ -92,28 +117,34 @@ class EdgeDataset(Dataset):
 
     def __getitem__(self, idx):
         train_file = self.X_train_files[idx]
-        test_file = self.X_test_files[idx] 
+        test_file = self.X_test_files[idx]
 
-        features, shape = feature_extraction(os.path.join(self.X_train_path, train_file))
-        labels = label_extraction(os.path.join(self.X_test_path, test_file))        
+        features, shape = feature_extraction(
+            os.path.join(self.X_train_path, train_file)
+        )
+        labels = label_extraction(os.path.join(self.X_test_path, test_file))
 
         return features, labels, shape, train_file
 
+
 class EdgeMLP(nn.Module):
-    def __init__(self, input_dim = 1, hidden_dim_input = 16, hidden_dim_output = 8, output_dim = 1):
+    def __init__(
+        self, input_dim=3, hidden_dim_input=32, hidden_dim_output=16, output_dim=1
+    ):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim_input),
             nn.ReLU(),
             nn.Linear(hidden_dim_input, hidden_dim_output),
             nn.ReLU(),
-            nn.Linear(hidden_dim_output, output_dim)
+            nn.Linear(hidden_dim_output, output_dim),
         )
 
     def forward(self, x):
         return self.net(x)
 
-def evaluate(model, loader, threshold = 0.5, save_path = None):
+
+def evaluate(model, loader, threshold=0.5, save_path=None):
     # we could compute the optimal threshold automatically??
 
     if save_path is not None:
@@ -127,20 +158,20 @@ def evaluate(model, loader, threshold = 0.5, save_path = None):
     with torch.no_grad():
         for features, labels, shape, (file,) in loader:
             # due to our batch size of 1, the shape of features is (1, H*W, 1)
-            # no we pop the first dim to get (H*W, 1) again
+            # now we pop the first dim to get (H*W, 1) again
             features = features.squeeze(0)
             labels = labels.squeeze(0)
 
             output = model(features)
-            # sigmoid converts to probabilities [0,1] then we convert to binary 0 or 1 output 
+            # sigmoid converts to probabilities [0,1] then we convert to binary 0 or 1 output
             # .float() since we need the same datatype everywhere
             predictions = (torch.sigmoid(output) > threshold).float()
 
             f1 = f1_score(labels.cpu().numpy(), predictions.cpu().numpy())
             f1_scores.append(f1)
 
-            #print("Mean prediction:", predictions.mean().item())
-            #print("Mean label:", labels.float().mean().item())
+            # print("Mean prediction:", predictions.mean().item())
+            # print("Mean label:", labels.float().mean().item())
 
             if save_path is not None:
                 os.makedirs(save_path, exist_ok=True)
@@ -152,6 +183,7 @@ def evaluate(model, loader, threshold = 0.5, save_path = None):
                 Image.fromarray(pred_img).save(os.path.join(save_path, f"pred_{file}"))
 
     return sum(f1_scores) / len(f1_scores)
+
 
 def compute_pos_weight(loader):
     total_edge = 0
@@ -167,7 +199,8 @@ def compute_pos_weight(loader):
     # relation between background and edge pixels
     return torch.tensor(total_background / total_edge).to(device)
 
-def train_model(model, train_loader, val_loader, epochs=10, learning_rate = 0.001):
+
+def train_model(model, train_loader, val_loader, epochs=10, learning_rate=0.001):
     # pos_weight, because we have such a large difference in number between background and edge pixels
     pos_weight = compute_pos_weight(train_loader)
     # sigmoid + BCE
@@ -176,15 +209,15 @@ def train_model(model, train_loader, val_loader, epochs=10, learning_rate = 0.00
 
     best_val_f1 = 0
 
+    # switch into training mode
+    model.train()
     for epoch in range(epochs):
-        # switch into training mode
-        model.train()
 
         for features, labels, _, _ in train_loader:
             features = features.squeeze(0)
             labels = labels.squeeze(0)
 
-            # clear pervious gradients
+            # clear previous gradients
             optimizer.zero_grad()
 
             outputs = model(features)
@@ -208,7 +241,12 @@ def train_model(model, train_loader, val_loader, epochs=10, learning_rate = 0.00
 
 if __name__ == "__main__":
     # hardware acceleration if available
-    device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+    device = (
+        torch.accelerator.current_accelerator().type
+        if torch.accelerator.is_available()
+        else "cpu"
+    )
+    print(f"Device: {device}")
     in_path = "./BSDS500-master/BSDS500/data"
     out_path = "./output"
 
@@ -221,13 +259,16 @@ if __name__ == "__main__":
     # all datasets
     train_dataset = EdgeDataset(
         os.path.join(in_path, "images", "train"),
-        os.path.join(in_path, "groundTruth", "train"))
+        os.path.join(in_path, "groundTruth", "train"),
+    )
     val_dataset = EdgeDataset(
         os.path.join(in_path, "images", "val"),
-        os.path.join(in_path, "groundTruth", "val"))
+        os.path.join(in_path, "groundTruth", "val"),
+    )
     test_dataset = EdgeDataset(
         os.path.join(in_path, "images", "test"),
-        os.path.join(in_path, "groundTruth", "test"))
+        os.path.join(in_path, "groundTruth", "test"),
+    )
 
     # shuffle??
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
@@ -235,7 +276,9 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_dataset, batch_size=1)
 
     model = EdgeMLP().to(device)
-    model = train_model(model, train_loader, val_loader, epochs=15, learning_rate=0.001)
+    model = train_model(
+        model, train_loader, val_loader, epochs=100, learning_rate=0.001
+    )
 
     # we saved the best working state
     model.load_state_dict(torch.load("best_model.pt"))
