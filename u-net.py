@@ -25,9 +25,9 @@ class ContourDataset(Dataset):
         muf = sio.loadmat(mat_path)
         mu = muf.get("groundTruth")
 
-        _, r = mu.shape
+        _, r = mu.shape # pyright: ignore[reportOptionalMemberAccess]
         masks = [
-            np.array(mu[0, i]["Boundaries"][0, 0], dtype=np.uint8)
+            np.array(mu[0, i]["Boundaries"][0, 0], dtype=np.uint8) # pyright: ignore[reportOptionalSubscript]
             for i in range(r)
         ]
 
@@ -136,8 +136,10 @@ class UNet(nn.Module):
 
 
 def train_model(model, train_loader, val_loader, device, epochs, lr):
+    pos_weight = compute_pos_weight(train_loader, device)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCEWithLogitsLoss(pos_weight=None) # maybe add pos weight again
 
     best_val = float("inf")
 
@@ -164,7 +166,7 @@ def train_model(model, train_loader, val_loader, device, epochs, lr):
 
         if val_loss < best_val:
             best_val = val_loss
-            torch.save(model.state_dict(), "best_model.pth")
+            torch.save(model.state_dict(), "best_model_unet.pth")
             print("Saved best model")
 
     print("Training complete.")
@@ -182,7 +184,21 @@ def evaluate(model, loader, criterion, device):
 
     return loss_total / len(loader)
 
-def predict(model, dataset, loader, device, output_dir="predictions"):
+def compute_pos_weight(loader, device):
+    total_edge = 0
+    total_background = 0
+
+    for _, labels in loader:
+        # each pixel is now a separate value
+        labels = labels.view(-1)
+        # count
+        total_edge += torch.sum(labels == 1).item()
+        total_background += torch.sum(labels == 0).item()
+
+    # relation between background and edge pixels
+    return torch.tensor(total_background / total_edge).to(device)
+
+def predict(model, dataset, loader, device, output_dir="predictions_unet"):
     os.makedirs(output_dir, exist_ok=True)
     model.eval()
 
@@ -226,7 +242,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--predict", default=False, action='store_true')
+    parser.add_argument("--predict", default=True, action='store_true')
 
     args = parser.parse_args()
     main(args)

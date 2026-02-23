@@ -2,3 +2,6 @@ output
 __pycache__
 checkpoints
 debug
+predictions
+best_model.pth
+best_model_mlp.pt

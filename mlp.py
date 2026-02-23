@@ -8,6 +8,7 @@ import scipy.io as sio
 from PIL import Image
 import os
 import sys
+from tqdm import tqdm
 
 
 def feature_extraction(file):
@@ -85,11 +86,11 @@ def label_extraction(file):
     # I read that it's common to average in our case, so...
     muf = sio.loadmat(file)
     mu = muf.get("groundTruth")
-    _, r = mu.shape
+    _, r = mu.shape # pyright: ignore[reportOptionalMemberAccess]
 
     boundaries = []
     for i in range(r):
-        boundary = mu[0, i]["Boundaries"][0, 0]
+        boundary = mu[0, i]["Boundaries"][0, 0] # pyright: ignore[reportOptionalSubscript]
         boundary = np.array(boundary)
         boundaries.append(boundary)
 
@@ -144,7 +145,7 @@ class EdgeMLP(nn.Module):
         return self.net(x)
 
 
-def evaluate(model, loader, threshold=0.55, save_path=None):
+def evaluate(model, loader, threshold=0.5, save_path=None, criterion=nn.BCEWithLogitsLoss()):
     # we could compute the optimal threshold automatically??
 
     if save_path is not None:
@@ -153,22 +154,22 @@ def evaluate(model, loader, threshold=0.55, save_path=None):
     # enter evaluation mode
     model.eval()
 
-    f1_scores = []
+    total_loss = 0
     # we don't need gradient calculation during evaluation
     with torch.no_grad():
         for features, labels, shape, (file,) in loader:
             # due to our batch size of 1, the shape of features is (1, H*W, 1)
             # now we pop the first dim to get (H*W, 1) again
-            features = features.squeeze(0)
-            labels = labels.squeeze(0)
+            features = features.to(device)
+            labels = labels.to(device)
 
             output = model(features)
             # sigmoid converts to probabilities [0,1] then we convert to binary 0 or 1 output
             # .float() since we need the same datatype everywhere
-            predictions = (torch.relu(output) > threshold).float()
 
-            f1 = f1_score(labels.cpu().numpy(), predictions.cpu().numpy())
-            f1_scores.append(f1)
+            loss = criterion(output, labels)
+            total_loss += loss.item()
+
 
             # print("Mean prediction:", predictions.mean().item())
             # print("Mean label:", labels.float().mean().item())
@@ -178,11 +179,11 @@ def evaluate(model, loader, threshold=0.55, save_path=None):
 
                 # get image size
                 H, W = shape
-                pred_img = predictions.cpu().numpy().reshape(H, W)
+                pred_img = output.cpu().numpy().reshape(H, W)
                 pred_img = (pred_img * 255).astype(np.uint8)
                 Image.fromarray(pred_img).save(os.path.join(save_path, f"pred_{file}"))
 
-    return sum(f1_scores) / len(f1_scores)
+    return total_loss / len(loader)
 
 
 def compute_pos_weight(loader):
@@ -204,37 +205,40 @@ def train_model(model, train_loader, val_loader, epochs=10, learning_rate=0.001)
     # pos_weight, because we have such a large difference in number between background and edge pixels
     pos_weight = compute_pos_weight(train_loader)
     # sigmoid + BCE
-    bce_ll = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=None) # maybe add pos weight back in
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    best_val_f1 = 0
+    best_val_f1 = float("inf")
 
     # switch into training mode
-    model.train()
     for epoch in range(epochs):
-
-        for features, labels, _, _ in train_loader:
-            features = features.squeeze(0)
-            labels = labels.squeeze(0)
+        model.train()
+        train_loss = 0
+        for features, labels, _, _ in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+            features = features.to(device)
+            labels = labels.to(device)
 
             # clear previous gradients
             optimizer.zero_grad()
 
             outputs = model(features)
-            loss = bce_ll(outputs, labels)
+            loss = criterion(outputs, labels)
 
             # compute gradients
             loss.backward()
             # update model
             optimizer.step()
+            train_loss += loss.item()
 
-        val_f1 = evaluate(model, val_loader)
-        print(f"Epoch {epoch} | F1: {val_f1:.4f}")
+        train_loss /= len(train_loader)
+
+        val_loss = evaluate(model, val_loader)
+        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
 
         # save the best model state
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
-            torch.save(model.state_dict(), "best_model.pt")
+        if val_loss < best_val_f1:
+            best_val_f1 = val_loss
+            torch.save(model.state_dict(), "best_model_mlp.pt")
 
     return model
 
@@ -242,7 +246,7 @@ def train_model(model, train_loader, val_loader, epochs=10, learning_rate=0.001)
 if __name__ == "__main__":
     # hardware acceleration if available
     device = (
-        torch.accelerator.current_accelerator().type
+        torch.accelerator.current_accelerator().type # pyright: ignore[reportOptionalMemberAccess]
         if torch.accelerator.is_available()
         else "cpu"
     )
@@ -281,7 +285,7 @@ if __name__ == "__main__":
     )
 
     # we saved the best working state
-    model.load_state_dict(torch.load("best_model.pt"))
+    model.load_state_dict(torch.load("best_model_mlp.pt"))
 
     # evaluate our model
     test_f1 = evaluate(model, test_loader, threshold=0.5, save_path=out_path)
