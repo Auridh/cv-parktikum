@@ -198,7 +198,7 @@ def train_model(model, train_loader, val_loader, device, epochs, lr):
         # torch.save(model.state_dict(), f"model_epoch{epoch+1}.pth")
         if val_loss < best_val:
             best_val = val_loss
-            torch.save(model.state_dict(), "best_model.pth")
+            torch.save(model.state_dict(), "best_model_unet.pth")
             print("Saved best model")
 
     print("Training complete.")
@@ -249,7 +249,7 @@ def main(args):
     if not args.predict:
         train_model(model, train_loader, val_loader, device, args.epochs, args.lr)
 
-    model.load_state_dict(torch.load("best_model.pth"))
+    model.load_state_dict(torch.load("best_model_unet.pth"))
     predict(model, test_dataset, test_loader, device, "predictions", threshold=args.threshold)
 
 
