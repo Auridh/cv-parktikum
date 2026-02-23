@@ -273,7 +273,7 @@ def main(args):
         train_model(model, train_loader, val_loader, device, args.epochs, args.lr)
 
     model.load_state_dict(torch.load("best_model_unet.pth"))
-    predict(model, test_dataset, test_loader, device, "predictions", threshold=args.threshold)
+    predict(model, test_dataset, test_loader, device, "predictions/unet", threshold=args.threshold)
 
 
 if __name__ == "__main__":

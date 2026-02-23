@@ -190,7 +190,7 @@ if __name__ == "__main__":
     print("Device:", device)
 
     in_path = "./BSDS500-master/BSDS500/data"
-    out_path = "./predictions"
+    out_path = "./predictions/mlp"
     test_images = os.path.join(in_path, "images", "test")
     test_gt = os.path.join(in_path, "groundTruth", "test")
 
