@@ -113,10 +113,20 @@ def hysteresis_thresholding(img, Tl:float=20, Th:float=60):
 if __name__ == "__main__":
 
     use_gauss = True
-    gauss_path = "./canny-gauss"
-    sobel_path = "./canny-sobel"
-    supp_path =  "./canny-supp"
-    hyst_path =  "./canny-result"
+    gauss_path = "./predictions/canny-gauss"
+    sobel_path = "./predictions/canny-sobel"
+    supp_path =  "./predictions/canny-supp"
+    hyst_path =  "./predictions/canny-result"
+
+
+    img = load_picture("demo-img.jpg")
+    out = conv(img, build_gaussian_filter(5, 1.4)) if use_gauss else None
+    sobel, theta = sobel_apply(out if use_gauss else img)
+    supp = non_maximum_suppression(sobel, theta)
+    Th = supp.max() * 0.08
+    Tl = Th * 0.2
+    hysterisis = hysteresis_thresholding(supp, Tl, Th)
+    Image.fromarray(hysterisis.astype(np.uint8) * 255).save("demo-img-out.jpg")
 
     for path in [gauss_path, sobel_path, supp_path, hyst_path]:
         if not exists(path):
