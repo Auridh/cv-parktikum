@@ -283,7 +283,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--predict", default=False, action='store_true')
-    parser.add_argument("--threshold", default=0.5, type=float)
+    parser.add_argument("--threshold", default=0.8, type=float)
 
     args = parser.parse_args()
     main(args)
