@@ -48,6 +48,7 @@ def feature_extraction(file):
     # like + 1e-8
     strength = torch.sqrt(Gx**2 + Gy**2)
     strength = strength / strength.max()
+    #strength = (strength - strength.mean()) / (strength.std() + 1e-8)
 
     # create two features each containing the normalized x or y coordinate
     x_coord = []
@@ -74,9 +75,10 @@ def feature_extraction(file):
     # each row is one pixel
     # each column is one feature
     strength = strength.permute(0, 2, 3, 1).reshape(-1, 1)
-    x_coord = x_coord.permute(0, 2, 3, 1).reshape(-1, 1)
-    y_coord = y_coord.permute(0, 2, 3, 1).reshape(-1, 1)
-    features = torch.cat((strength, x_coord, y_coord), 1)
+    #x_coord = x_coord.permute(0, 2, 3, 1).reshape(-1, 1)
+    #y_coord = y_coord.permute(0, 2, 3, 1).reshape(-1, 1)
+    #features = torch.cat((strength, x_coord, y_coord), 1)
+    features = torch.cat((strength,), 1)
 
     return features, (H, W)
 
@@ -129,7 +131,7 @@ def train_per_image(features, labels, shape, epochs=20, lr=0.001, threshold=None
     X_test = features[test_idx]
     y_test = labels[test_idx]
 
-    model = EdgeMLP().to(device)
+    model = EdgeMLP(features.shape[1]).to(device)
 
     pos = torch.sum(y_train == 1)
     neg = torch.sum(y_train == 0)
