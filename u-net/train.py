@@ -1,25 +1,18 @@
-import argparse
 import logging
 import os
-import random
-import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as transforms
-import torchvision.transforms.functional as TF
 from pathlib import Path
 from torch import optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from evaluate import evaluate
 from unet import UNet
-from utils.data_loading import BasicDataset, CarvanaDataset
+from utils.data_loading import BasicDataset
 from utils.dice_score import dice_loss
 
-dir_img = Path('./data/imgs/')
-dir_mask = Path('./data/masks/')
 dir_checkpoint = Path('./checkpoints/')
 
 
@@ -30,23 +23,16 @@ def train_model(
         batch_size: int = 1,
         learning_rate: float = 1e-5,
         save_checkpoint: bool = True,
-        img_scale: float = 1.0,
         amp: bool = False,
         weight_decay: float = 1e-8,
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
 ):
     # 1. Create training dataset
-    try:
-        train_set = CarvanaDataset(Path(dir_img).joinpath('train'), Path(dir_mask).joinpath('train'), img_scale)
-    except (AssertionError, RuntimeError, IndexError):
-        train_set = BasicDataset(Path(dir_img).joinpath('train'), Path(dir_mask).joinpath('train'), img_scale)
+    train_set = BasicDataset(Path(dir_img).joinpath('train'), Path(dir_mask).joinpath('train'))
 
     # 2. Create validation dataset
-    try:
-        val_set = CarvanaDataset(Path(dir_img).joinpath('val'), Path(dir_mask).joinpath('val'), img_scale)
-    except (AssertionError, RuntimeError, IndexError):
-        val_set = BasicDataset(Path(dir_img).joinpath('val'), Path(dir_mask).joinpath('val'), img_scale)
+    val_set = BasicDataset(Path(dir_img).joinpath('val'), Path(dir_mask).joinpath('val'))
 
     # 3. Create data loaders
     loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
@@ -62,7 +48,6 @@ def train_model(
         Validation size: {len(val_set)}
         Checkpoints:     {save_checkpoint}
         Device:          {device.type}
-        Images scaling:  {img_scale}
         Mixed Precision: {amp}
     ''')
 
@@ -92,16 +77,13 @@ def train_model(
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     masks_pred = model(images)
-                    if model.n_classes == 1:
-                        loss = criterion(masks_pred.squeeze(1), true_masks.float())
-                        loss += dice_loss(F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False)
-                    else:
-                        loss = criterion(masks_pred, true_masks)
-                        loss += dice_loss(
-                            F.softmax(masks_pred, dim=1).float(),
-                            F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),
-                            multiclass=True
-                        )
+                    
+                    loss = criterion(masks_pred, true_masks)
+                    loss += dice_loss(
+                        F.softmax(masks_pred, dim=1).float(),
+                        F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),
+                        multiclass=True
+                    )
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -143,7 +125,7 @@ if __name__ == '__main__':
     # Change here to adapt to your data
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
-    model = UNet(n_channels=3, n_classes=86)
+    model = UNet(n_channels=3, n_classes=2)
     model = model.to(memory_format=torch.channels_last)
 
     logging.info(f'Network:\n'
@@ -163,7 +145,6 @@ if __name__ == '__main__':
             batch_size=1,
             learning_rate=0.001,
             device=device,
-            img_scale=1,
             amp=True
         )
     except torch.cuda.OutOfMemoryError:
@@ -178,6 +159,5 @@ if __name__ == '__main__':
             batch_size=1,
             learning_rate=0.001,
             device=device,
-            img_scale=1,
             amp=True
         )

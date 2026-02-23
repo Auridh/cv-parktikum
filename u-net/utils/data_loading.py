@@ -12,27 +12,36 @@ from pathlib import Path
 from torch.utils.data import Dataset
 from tqdm import tqdm
 import scipy.io as sio
-
+from scipy.ndimage import binary_dilation
 
 def load_image(filename):
     ext = splitext(filename)[1]
     if ext == '.npy':
         return Image.fromarray(np.load(filename))
     elif ext in ['.pt', '.pth']:
-        return Image.fromarray(torch.load(filename).numpy())
-    elif ext == '.mat':
-        muf = sio.loadmat(filename)
-        mu = muf.get("groundTruth")
-        seg = mu[0, 0]["Segmentation"][0, 0]
-        seg = np.array(seg)
-        return Image.fromarray(seg)
+        return Image.fromarray(torch.load(filename).numpy()) 
     else:
         return Image.open(filename)
 
+def dilate_mask(mask, iterations=2):
+    return binary_dilation(mask, iterations=iterations).astype(np.uint8)
 
-def unique_mask_values(idx, mask_dir, mask_suffix):
+def load_mask(filename, dilate_iterations=0):
+    muf = sio.loadmat(filename)
+    mu = muf.get("groundTruth")
+    _, r = mu.shape
+    masks = [np.array(mu[0, i]["Boundaries"][0, 0], dtype=np.uint8) for i in range(r)]
+    combined_mask = np.logical_or.reduce(masks).astype(np.uint8)
+
+    if (dilate_iterations > 0):
+        combined_mask = dilate_mask(combined_mask, dilate_iterations)
+    
+    return Image.fromarray(combined_mask)
+
+
+def unique_mask_values(idx, mask_dir, mask_suffix, mask_dilation):
     mask_file = list(mask_dir.glob(idx + mask_suffix + '.*'))[0]
-    mask = np.asarray(load_image(mask_file))
+    mask = np.asarray(load_mask(mask_file, mask_dilation))
     if mask.ndim == 2:
         return np.unique(mask)
     elif mask.ndim == 3:
@@ -41,14 +50,12 @@ def unique_mask_values(idx, mask_dir, mask_suffix):
     else:
         raise ValueError(f'Loaded masks should have 2 or 3 dimensions, found {mask.ndim}')
 
-
-class BasicDataset(Dataset):
-    def __init__(self, images_dir: str, mask_dir: str, scale: float = 1.0, mask_suffix: str = ''):
+class  BasicDataset(Dataset):
+    def __init__(self, images_dir: Path, mask_dir: Path, mask_suffix: str = '', mask_dilation: int = 0):
         self.images_dir = Path(images_dir)
         self.mask_dir = Path(mask_dir)
-        assert 0 < scale <= 1, 'Scale must be between 0 and 1'
-        self.scale = scale
         self.mask_suffix = mask_suffix
+        self.mask_dilation = mask_dilation
 
         self.ids = [splitext(file)[0] for file in listdir(images_dir) if isfile(join(images_dir, file)) and not file.startswith('.')]
         if not self.ids:
@@ -58,7 +65,7 @@ class BasicDataset(Dataset):
         logging.info('Scanning mask files to determine unique values')
         with Pool() as p:
             unique = list(tqdm(
-                p.imap(partial(unique_mask_values, mask_dir=self.mask_dir, mask_suffix=self.mask_suffix), self.ids),
+                p.imap(partial(unique_mask_values, mask_dir=self.mask_dir, mask_suffix=self.mask_suffix, mask_dilation=self.mask_dilation), self.ids),
                 total=len(self.ids)
             ))
 
@@ -69,15 +76,13 @@ class BasicDataset(Dataset):
         return len(self.ids)
 
     @staticmethod
-    def preprocess(mask_values, pil_img, scale, is_mask):
+    def preprocess(mask_values, pil_img, is_mask):
         w, h = pil_img.size
-        newW, newH = int(scale * w), int(scale * h)
-        assert newW > 0 and newH > 0, 'Scale is too small, resized images would have no pixel'
-        pil_img = pil_img.resize((newW, newH), resample=Image.NEAREST if is_mask else Image.BICUBIC)
+        pil_img = pil_img.resize((w, h), resample=Image.NEAREST if is_mask else Image.BICUBIC)
         img = np.asarray(pil_img)
 
         if is_mask:
-            mask = np.zeros((newH, newW), dtype=np.int64)
+            mask = np.zeros((h, w), dtype=np.int64)
             for i, v in enumerate(mask_values):
                 if img.ndim == 2:
                     mask[img == v] = i
@@ -104,21 +109,16 @@ class BasicDataset(Dataset):
 
         assert len(img_file) == 1, f'Either no image or multiple images found for the ID {name}: {img_file}'
         assert len(mask_file) == 1, f'Either no mask or multiple masks found for the ID {name}: {mask_file}'
-        mask = load_image(mask_file[0])
+        mask = load_mask(mask_file[0], self.mask_dilation)
         img = load_image(img_file[0])
 
         assert img.size == mask.size, \
             f'Image and mask {name} should be the same size, but are {img.size} and {mask.size}'
 
-        img = self.preprocess(self.mask_values, img, self.scale, is_mask=False)
-        mask = self.preprocess(self.mask_values, mask, self.scale, is_mask=True)
+        img = self.preprocess(self.mask_values, img, is_mask=False)
+        mask = self.preprocess(self.mask_values, mask, is_mask=True)
 
         return {
             'image': torch.as_tensor(img.copy()).float().contiguous(),
             'mask': torch.as_tensor(mask.copy()).long().contiguous()
         }
-
-
-class CarvanaDataset(BasicDataset):
-    def __init__(self, images_dir, mask_dir, scale:float=1):
-        super().__init__(images_dir, mask_dir, scale, mask_suffix='_mask')

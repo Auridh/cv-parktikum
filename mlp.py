@@ -144,7 +144,7 @@ class EdgeMLP(nn.Module):
         return self.net(x)
 
 
-def evaluate(model, loader, threshold=0.5, save_path=None):
+def evaluate(model, loader, threshold=0.55, save_path=None):
     # we could compute the optimal threshold automatically??
 
     if save_path is not None:
@@ -165,7 +165,7 @@ def evaluate(model, loader, threshold=0.5, save_path=None):
             output = model(features)
             # sigmoid converts to probabilities [0,1] then we convert to binary 0 or 1 output
             # .float() since we need the same datatype everywhere
-            predictions = (torch.sigmoid(output) > threshold).float()
+            predictions = (torch.relu(output) > threshold).float()
 
             f1 = f1_score(labels.cpu().numpy(), predictions.cpu().numpy())
             f1_scores.append(f1)

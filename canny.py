@@ -2,6 +2,8 @@ import numpy as np
 from os.path import basename
 from utils import *
 from alive_progress import alive_bar
+from sklearn.metrics import f1_score
+
 
 
 def build_gaussian_filter(size: int, sigma: float = 1):
@@ -119,25 +121,32 @@ if __name__ == "__main__":
     # show_picture(imgs)
 
     paths = get_image_paths("./BSDS500-master/BSDS500/data/images/test")
-
+    contours = load_contours(
+        "./BSDS500-master/BSDS500/data/groundTruth/test/"
+    )
+    f1_scores = []
     with alive_bar(len(paths)) as bar:
         results = {}
         for i, path in enumerate(paths):
             img = load_picture(path)
-            out = conv(img, build_gaussian_filter(5, 1))
+            out = conv(img, build_gaussian_filter(7, 1.5))
             sobel, theta = sobel_apply(out)
             supp = non_maximum_suppression(sobel, theta)
             Th = supp.max() * 0.1
             Tl = Th * 0.05
             hystersis = hysteresis_thresholding(supp, Tl, Th)
             results[basename(path).split(".")[0]] = hystersis
+            labels = contours[basename(path).split(".")[0]]
+            label = np.mean(labels, axis=0)
+            binary_label = (label > 0.5).astype(np.float32).reshape(-1,1)
+
+            score = f1_score(binary_label, hystersis.reshape(-1,1))
+            f1_scores.append(score)
+            print(f"F1 score: {score}")
             # if i % 10 == 0:
             #     print(f"{i/len(paths) * 100} percent done loading results")
             bar()
 
-    contours = load_contours(
-        "./BSDS500-master/BSDS500/data/groundTruth/test/"
-    )
     print("Done loading contours")
     diffs, avg = calc_diffs(results, contours)
     print("Diffs:")
