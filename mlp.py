@@ -80,53 +80,24 @@ def feature_extraction(file):
 
     return features, (H, W)
 
-
 def label_extraction(file):
-    # Load groundTruths
-    # I read that it's common to average in our case, so...
     muf = sio.loadmat(file)
     mu = muf.get("groundTruth")
-    _, r = mu.shape # pyright: ignore[reportOptionalMemberAccess]
+    _, r = mu.shape
 
-    boundaries = []
-    for i in range(r):
-        boundary = mu[0, i]["Boundaries"][0, 0] # pyright: ignore[reportOptionalSubscript]
-        boundary = np.array(boundary)
-        boundaries.append(boundary)
+    masks = [
+        np.array(mu[0, i]["Boundaries"][0, 0], dtype=np.uint8)
+        for i in range(r)
+    ]
 
-    avg_boundary = np.mean(boundaries, axis=0)
-    # only haven true and false for edges simplifies the rest of the model
-    binary_labels = (avg_boundary > 0.5).astype(np.float32)
-    labels = torch.from_numpy(binary_labels).reshape(-1, 1).to(device)
+    combined = np.zeros_like(masks[0], dtype=np.uint8)
+    for m in masks:
+        combined = np.logical_or(combined, m)
 
+    combined = combined.astype(np.float32)
+
+    labels = torch.from_numpy(combined).reshape(-1, 1).to(device)
     return labels
-
-
-class EdgeDataset(Dataset):
-    def __init__(self, train_path, test_path):
-        self.X_train_path = os.path.abspath(train_path)
-        self.X_test_path = os.path.abspath(test_path)
-        self.X_train_files = sorted(
-            [f for f in os.listdir(self.X_train_path) if f.lower().endswith(".jpg")]
-        )
-        self.X_test_files = sorted(
-            [f for f in os.listdir(self.X_test_path) if f.lower().endswith(".mat")]
-        )
-
-    def __len__(self):
-        return len(self.X_train_files)
-
-    def __getitem__(self, idx):
-        train_file = self.X_train_files[idx]
-        test_file = self.X_test_files[idx]
-
-        features, shape = feature_extraction(
-            os.path.join(self.X_train_path, train_file)
-        )
-        labels = label_extraction(os.path.join(self.X_test_path, test_file))
-
-        return features, labels, shape, train_file
-
 
 class EdgeMLP(nn.Module):
     def __init__(
@@ -145,148 +116,135 @@ class EdgeMLP(nn.Module):
         return self.net(x)
 
 
-def evaluate(model, loader, threshold=0.5, save_path=None, criterion=nn.BCEWithLogitsLoss()):
-    # we could compute the optimal threshold automatically??
+def train_per_image(features, labels, shape, epochs=20, lr=0.001, threshold=None):
+    N = features.shape[0]
+    
+    idx = torch.randperm(N)
+    train_size = int(0.1 * N)
+    train_idx = idx[:train_size]
+    test_idx = idx[train_size:]
 
-    if save_path is not None:
-        save_path = os.path.abspath(save_path)
+    X_train = features[train_idx]
+    y_train = labels[train_idx]
+    X_test = features[test_idx]
+    y_test = labels[test_idx]
 
-    # enter evaluation mode
-    model.eval()
+    model = EdgeMLP().to(device)
 
-    total_loss = 0
-    # we don't need gradient calculation during evaluation
-    with torch.no_grad():
-        for features, labels, shape, (file,) in loader:
-            # due to our batch size of 1, the shape of features is (1, H*W, 1)
-            # now we pop the first dim to get (H*W, 1) again
-            features = features.to(device)
-            labels = labels.to(device)
+    pos = torch.sum(y_train == 1)
+    neg = torch.sum(y_train == 0)
+    pos_weight = (neg / pos).clamp(min=1.0)
+    print(f"> PW: {pos_weight}")
 
-            output = model(features)
-            # sigmoid converts to probabilities [0,1] then we convert to binary 0 or 1 output
-            # .float() since we need the same datatype everywhere
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-            loss = criterion(output, labels)
-            total_loss += loss.item()
-
-
-            # print("Mean prediction:", predictions.mean().item())
-            # print("Mean label:", labels.float().mean().item())
-
-            if save_path is not None:
-                os.makedirs(save_path, exist_ok=True)
-
-                # get image size
-                H, W = shape
-                pred_img = output.cpu().numpy().reshape(H, W)
-                pred_img = (pred_img * 255).astype(np.uint8)
-                Image.fromarray(pred_img).save(os.path.join(save_path, f"pred_{file}"))
-
-    return total_loss / len(loader)
-
-
-def compute_pos_weight(loader):
-    total_edge = 0
-    total_background = 0
-
-    for features, labels, _, _ in loader:
-        # each pixel is now a separate value
-        labels = labels.view(-1)
-        # count
-        total_edge += torch.sum(labels == 1).item()
-        total_background += torch.sum(labels == 0).item()
-
-    # relation between background and edge pixels
-    return torch.tensor(total_background / total_edge).to(device)
-
-
-def train_model(model, train_loader, val_loader, epochs=10, learning_rate=0.001):
-    # pos_weight, because we have such a large difference in number between background and edge pixels
-    pos_weight = compute_pos_weight(train_loader)
-    # sigmoid + BCE
-    criterion = nn.BCEWithLogitsLoss(pos_weight=None) # maybe add pos weight back in
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-
-    best_val_f1 = float("inf")
-
-    # switch into training mode
-    for epoch in range(epochs):
+    # training
+    for _ in range(epochs):
         model.train()
-        train_loss = 0
-        for features, labels, _, _ in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
-            features = features.to(device)
-            labels = labels.to(device)
+        optimizer.zero_grad()
+        output = model(X_train)
+        loss = criterion(output, y_train)
+        loss.backward()
+        optimizer.step()
 
-            # clear previous gradients
-            optimizer.zero_grad()
+    # evaluation
+    model.eval()
+    with torch.no_grad():
+        # test F1 remaining 90 percent
+        logits_test = model(X_test)
+        probs_test = torch.sigmoid(logits_test)
+        preds_test = (probs_test > 0.5).float()
+        f1 = f1_score(
+            y_test.cpu().numpy(),
+            preds_test.cpu().numpy()
+        )
 
-            outputs = model(features)
-            loss = criterion(outputs, labels)
+        # full image prediction
+        logits_full = model(features)
+        probs_full = torch.sigmoid(logits_full)
 
-            # compute gradients
-            loss.backward()
-            # update model
-            optimizer.step()
-            train_loss += loss.item()
+        # adaptive threshold
+        if threshold is None:
+            y_true = labels.cpu().numpy()
+            prob_vals = probs_full.cpu().numpy()
 
-        train_loss /= len(train_loader)
+            best_f1 = 0
+            best_t = 0.5
+            for t in np.linspace(0.3, 0.7, 40):
+                pred_bin = (prob_vals > t).astype(np.float32)
+                f1_t = f1_score(y_true, pred_bin)
+                if f1_t > best_f1:
+                    best_f1 = f1_t
+                    best_t = t
+            threshold = best_t
+            print(f"> OT: {threshold:.3f}")
 
-        val_loss = evaluate(model, val_loader)
-        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        preds_full = (probs_full > threshold).float()
 
-        # save the best model state
-        if val_loss < best_val_f1:
-            best_val_f1 = val_loss
-            torch.save(model.state_dict(), "best_model_mlp.pt")
-
-    return model
+    return f1, preds_full, probs_full
 
 
 if __name__ == "__main__":
-    # hardware acceleration if available
-    device = (
-        torch.accelerator.current_accelerator().type # pyright: ignore[reportOptionalMemberAccess]
-        if torch.accelerator.is_available()
-        else "cpu"
-    )
-    print(f"Device: {device}")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("Device:", device)
+
     in_path = "./BSDS500-master/BSDS500/data"
-    out_path = "./output"
+    out_path = "./predictions"
+    test_images = os.path.join(in_path, "images", "test")
+    test_gt = os.path.join(in_path, "groundTruth", "test")
 
-    # get path from cmd
-    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
-        in_path = sys.argv[1]
-    if len(sys.argv) > 2:
-        out_path = sys.argv[2]
+    os.makedirs(out_path, exist_ok=True)
 
-    # all datasets
-    train_dataset = EdgeDataset(
-        os.path.join(in_path, "images", "train"),
-        os.path.join(in_path, "groundTruth", "train"),
+    image_files = sorted(
+        [f for f in os.listdir(test_images) if f.endswith(".jpg")]
     )
-    val_dataset = EdgeDataset(
-        os.path.join(in_path, "images", "val"),
-        os.path.join(in_path, "groundTruth", "val"),
-    )
-    test_dataset = EdgeDataset(
-        os.path.join(in_path, "images", "test"),
-        os.path.join(in_path, "groundTruth", "test"),
+    gt_files = sorted(
+        [f for f in os.listdir(test_gt) if f.endswith(".mat")]
     )
 
-    # shuffle??
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=1)
-    test_loader = DataLoader(test_dataset, batch_size=1)
+    all_f1 = []
+    all_probs_min = []
+    all_probs_max = []
+    all_probs_mean = []
 
-    model = EdgeMLP().to(device)
-    model = train_model(
-        model, train_loader, val_loader, epochs=100, learning_rate=0.001
-    )
+    for img_file, gt_file in zip(image_files, gt_files):
+        print("#"*40)
+        print(f"# {img_file}")
 
-    # we saved the best working state
-    model.load_state_dict(torch.load("best_model_mlp.pt"))
+        features, shape = feature_extraction(
+            os.path.join(test_images, img_file)
+        )
+        labels = label_extraction(
+            os.path.join(test_gt, gt_file)
+        )
 
-    # evaluate our model
-    test_f1 = evaluate(model, test_loader, threshold=0.5, save_path=out_path)
-    print("Final Test F1:", test_f1)
+        f1, preds_full, probs_full = train_per_image(
+            features, labels, shape, epochs=100
+        )
+
+        all_f1.append(f1)
+        print(f"> F1: {f1}")
+        all_probs_min.append(probs_full.min().item())
+        all_probs_max.append(probs_full.max().item())
+        all_probs_mean.append(probs_full.mean().item())
+
+        H, W = shape
+
+        pred_img = preds_full.cpu().numpy().reshape(H, W)
+        pred_img = (pred_img * 255).astype(np.uint8)
+        Image.fromarray(pred_img).save(
+            os.path.join(out_path, f"mlp_binary_{img_file}")
+        )
+
+        prob_img = probs_full.cpu().numpy().reshape(H, W)
+        prob_img = (prob_img * 255).astype(np.uint8)
+        Image.fromarray(prob_img).save(
+            os.path.join(out_path, f"mlp_prob_{img_file}")
+        )
+
+    print("\n====================")
+    print("Mean F1 over test set:", np.mean(all_f1))
+    print("Mean Min Prob over test set:", np.mean(all_probs_min))
+    print("Mean Max Prob over test set:", np.mean(all_probs_max))
+    print("Mean Prob over test set:", np.mean(all_probs_mean))

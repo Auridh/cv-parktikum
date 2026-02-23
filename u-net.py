@@ -12,6 +12,9 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 
+from sklearn.metrics import f1_score
+
+
 class ContourDataset(Dataset):
     def __init__(self, data_root, split):
         self.image_dir = os.path.join(data_root, "images", split)
@@ -214,23 +217,43 @@ def evaluate(model, val_loader, device, pos_weight):
         total_loss += loss.item()
     return total_loss / len(val_loader)
 
+@torch.no_grad()
 def predict(model, dataset, loader, device, output_dir="predictions", threshold=0.5):
     os.makedirs(output_dir, exist_ok=True)
     model.eval()
 
-    with torch.no_grad():
-        for i, (img, mask) in enumerate(loader):
-            img = img.to(device)
-            output = torch.sigmoid(model(img))
-            pred = (output > threshold).cpu().numpy()
+    all_f1 = []
 
-            # original filename
-            original_path = dataset.image_paths[i]
-            name, _ = os.path.splitext(os.path.basename(original_path))
+    for i, (img, mask) in enumerate(loader):
+        img, mask = img.to(device), mask.to(device)
+        output = torch.sigmoid(model(img))
 
-            # contour mask
-            mask_img = (pred[0, 0] * 255).astype(np.uint8)
-            Image.fromarray(mask_img).save(os.path.join(output_dir, f"{name}_bnd.png"))
+        # original filename
+        original_path = dataset.image_paths[i]
+        name, _ = os.path.splitext(os.path.basename(original_path))
+        print("#"*40)
+        print(f"# {os.path.basename(original_path)}")
+
+        # Save probability map
+        prob_map = (output[0, 0].cpu().numpy() * 255).astype(np.uint8)
+        Image.fromarray(prob_map).save(os.path.join(output_dir, f"unet_prob_{name}.png"))
+
+        # Compute thresholded prediction
+        pred = (output > threshold).cpu().numpy().astype(np.uint8)
+
+        # Save thresholded mask
+        mask_img = (pred[0, 0] * 255).astype(np.uint8)
+        Image.fromarray(mask_img).save(os.path.join(output_dir, f"unet_binary_{name}.png"))
+
+        # Compute F1 score
+        mask_np = mask.cpu().numpy().astype(np.uint8)
+        f1 = f1_score(mask_np.flatten(), pred.flatten())
+        all_f1.append(f1)
+
+        print(f"> F1: {f1:.4f}")
+
+    mean_f1 = np.mean(all_f1)
+    print(f"Mean F1 Score: {mean_f1:.4f}")
 
 
 def main(args):
@@ -255,7 +278,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root", type=str, required=True)
+    parser.add_argument("--data_root", type=str, default="./BSDS500-master/BSDS500/data")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
