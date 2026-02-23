@@ -1,5 +1,6 @@
 import logging
 import os
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,6 +8,7 @@ from pathlib import Path
 from torch import optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from PIL import Image
 
 from evaluate import evaluate
 from unet import UNet
@@ -76,9 +78,18 @@ def train_model(
                 true_masks = true_masks.to(device=device, dtype=torch.long)
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
-                    masks_pred = model(images)
-                    
+                    masks_pred:torch.Tensor = model(images)
+                    mask_np_0 = masks_pred.cpu().detach().numpy().astype(np.uint8)[0][0] * 255
+                    mask_np_1 = masks_pred.cpu().detach().numpy().astype(np.uint8)[0][0] * 255
+                    # mask_np = F.interpolate(masks_pred.cpu(), (mask_np.shape[3], mask_np.shape[2]), mode='bilinear').detach().numpy().astype(np.uint8)
+                    # print(f"Output mask shape: {mask_np.shape}")
+                    #Image.fromarray(mask_np_0).save("./debug/prediction_" + str(global_step) + "_dim0" + ".jpg")
+                    #Image.fromarray(mask_np_1).save("./debug/prediction_" + str(global_step) + "_dim1" + ".jpg")
+                    print(f"True mask shape: {true_masks.shape}")
+                    print(f"Predicted mask shape: {masks_pred.shape}")
+
                     loss = criterion(masks_pred, true_masks)
+                    print(f"Loss: {loss}")
                     loss += dice_loss(
                         F.softmax(masks_pred, dim=1).float(),
                         F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),

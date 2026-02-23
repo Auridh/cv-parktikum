@@ -35,7 +35,6 @@ def load_mask(filename, dilate_iterations=0):
 
     if (dilate_iterations > 0):
         combined_mask = dilate_mask(combined_mask, dilate_iterations)
-    
     return Image.fromarray(combined_mask)
 
 
@@ -76,7 +75,7 @@ class  BasicDataset(Dataset):
         return len(self.ids)
 
     @staticmethod
-    def preprocess(mask_values, pil_img, is_mask):
+    def preprocess(mask_values, pil_img, is_mask, name):
         w, h = pil_img.size
         pil_img = pil_img.resize((w, h), resample=Image.NEAREST if is_mask else Image.BICUBIC)
         img = np.asarray(pil_img)
@@ -88,7 +87,7 @@ class  BasicDataset(Dataset):
                     mask[img == v] = i
                 else:
                     mask[(img == v).all(-1)] = i
-
+            Image.fromarray(mask.astype(np.uint8) * 255).save("./debug/" + name + "_mask" + ".jpg") # only for testing
             return mask
 
         else:
@@ -99,7 +98,6 @@ class  BasicDataset(Dataset):
 
             if (img > 1).any():
                 img = img / 255.0
-
             return img
 
     def __getitem__(self, idx):
@@ -115,8 +113,8 @@ class  BasicDataset(Dataset):
         assert img.size == mask.size, \
             f'Image and mask {name} should be the same size, but are {img.size} and {mask.size}'
 
-        img = self.preprocess(self.mask_values, img, is_mask=False)
-        mask = self.preprocess(self.mask_values, mask, is_mask=True)
+        img = self.preprocess(self.mask_values, img, is_mask=False, name=name)
+        mask = self.preprocess(self.mask_values, mask, is_mask=True, name=name)
 
         return {
             'image': torch.as_tensor(img.copy()).float().contiguous(),
