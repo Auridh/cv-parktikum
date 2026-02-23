@@ -1,5 +1,6 @@
 import numpy as np
-from os.path import basename
+from os.path import basename, exists
+from os import mkdir
 from utils import *
 from alive_progress import alive_bar
 from sklearn.metrics import f1_score
@@ -74,7 +75,7 @@ def non_maximum_suppression(img, theta):
     return out
 
 
-def hysteresis_thresholding(img, Tl=20, Th=60):
+def hysteresis_thresholding(img, Tl:float=20, Th:float=60):
     out = np.zeros(img.shape)
 
     # init
@@ -84,8 +85,8 @@ def hysteresis_thresholding(img, Tl=20, Th=60):
             if img[y][x] >= Th:
                 out[y][x] = 1
 
+    # while changes still happening
     change = True
-
     while change:
         change = False
         for y in range(Y):
@@ -110,15 +111,16 @@ def hysteresis_thresholding(img, Tl=20, Th=60):
 
 
 if __name__ == "__main__":
-    # img = load_picture(abspath("./cv-parktikum/demo-img.jpg"))
-    # out = conv(img, build_gaussian_filter(5, 1.4))
-    # sobel, theta = sobel_apply(out)
-    # supp = non_maximum_suppression(sobel, theta)
-    # Th = supp.max() * 0.1
-    # Tl = Th * 0.05
-    # hysteresis = hysteresis_thresholding(supp, Tl, Th)
-    # imgs = [img, out, supp, hysteresis]
-    # show_picture(imgs)
+
+    use_gauss = True
+    gauss_path = "./canny-gauss"
+    sobel_path = "./canny-sobel"
+    supp_path =  "./canny-supp"
+    hyst_path =  "./canny-result"
+
+    for path in [gauss_path, sobel_path, supp_path, hyst_path]:
+        if not exists(path):
+            mkdir(path)
 
     paths = get_image_paths("./BSDS500-master/BSDS500/data/images/test")
     contours = load_contours(
@@ -128,23 +130,28 @@ if __name__ == "__main__":
     with alive_bar(len(paths)) as bar:
         results = {}
         for i, path in enumerate(paths):
+            elem_name = basename(path).split(".")[0]
             img = load_picture(path)
-            out = conv(img, build_gaussian_filter(7, 1.5))
-            sobel, theta = sobel_apply(out)
+            out = conv(img, build_gaussian_filter(5, 1.4)) if use_gauss else None
+            sobel, theta = sobel_apply(out if use_gauss else img)
             supp = non_maximum_suppression(sobel, theta)
-            Th = supp.max() * 0.1
-            Tl = Th * 0.05
-            hystersis = hysteresis_thresholding(supp, Tl, Th)
-            results[basename(path).split(".")[0]] = hystersis
-            labels = contours[basename(path).split(".")[0]]
+            Th = supp.max() * 0.08
+            Tl = Th * 0.2
+            hysterisis = hysteresis_thresholding(supp, Tl, Th)
+            results[basename(path).split(".")[0]] = hysterisis
+            labels = contours[elem_name]
             label = np.mean(labels, axis=0)
+            
             binary_label = (label > 0.5).astype(np.float32).reshape(-1,1)
-
-            score = f1_score(binary_label, hystersis.reshape(-1,1))
+            score = f1_score(binary_label, hysterisis.reshape(-1,1))
             f1_scores.append(score)
             print(f"F1 score: {score}")
-            # if i % 10 == 0:
-            #     print(f"{i/len(paths) * 100} percent done loading results")
+            
+            # save part results
+            if use_gauss: Image.fromarray(out.astype(np.uint8)).save(join(gauss_path, elem_name + ".jpg")) # pyright: ignore[reportOptionalMemberAccess]
+            Image.fromarray(sobel.astype(np.uint8)).save(join(sobel_path, elem_name + ".jpg"))
+            Image.fromarray(supp.astype(np.uint8)).save(join(supp_path, elem_name + ".jpg"))
+            Image.fromarray(hysterisis.astype(np.uint8) * 255).save(join(hyst_path, elem_name + ".jpg"))
             bar()
 
     print("Done loading contours")
