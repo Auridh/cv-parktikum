@@ -41,8 +41,9 @@ def feature_extraction(file):
         .to(device)
     )
 
-    Gx = F.conv2d(img_tensor, sobel_x, padding=1)
-    Gy = F.conv2d(img_tensor, sobel_y, padding=1)
+    img_tensor = F.pad(img_tensor, (1, 1, 1, 1), mode='reflect')
+    Gx = F.conv2d(img_tensor, sobel_x)
+    Gy = F.conv2d(img_tensor, sobel_y)
 
     # it could be necessary to add a small factor to avoid null division on back propagation
     # like + 1e-8
