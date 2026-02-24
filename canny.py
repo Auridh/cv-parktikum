@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from os.path import basename, exists
 from os import mkdir
 from utils import *
@@ -113,10 +114,11 @@ def hysteresis_thresholding(img, Tl:float=20, Th:float=60):
 if __name__ == "__main__":
 
     use_gauss = True
+    predict = False
     gauss_path = "./predictions/canny-gauss"
     sobel_path = "./predictions/canny-sobel"
     supp_path =  "./predictions/canny-supp"
-    hyst_path =  "./predictions/canny-result"
+    hyst_path =  "./canny-result"
 
 
     img = load_picture("demo-img.jpg")
@@ -137,36 +139,56 @@ if __name__ == "__main__":
         "./BSDS500-master/BSDS500/data/groundTruth/test/"
     )
     f1_scores = []
-    with alive_bar(len(paths)) as bar:
-        results = {}
-        for i, path in enumerate(paths):
-            elem_name = basename(path).split(".")[0]
-            img = load_picture(path)
-            out = conv(img, build_gaussian_filter(5, 1.4)) if use_gauss else None
-            sobel, theta = sobel_apply(out if use_gauss else img)
-            supp = non_maximum_suppression(sobel, theta)
-            Th = supp.max() * 0.08
-            Tl = Th * 0.2
-            hysterisis = hysteresis_thresholding(supp, Tl, Th)
-            results[basename(path).split(".")[0]] = hysterisis
-            labels = contours[elem_name]
-            label = np.mean(labels, axis=0)
-            
-            binary_label = (label > 0.5).astype(np.float32).reshape(-1,1)
-            score = f1_score(binary_label, hysterisis.reshape(-1,1))
-            f1_scores.append(score)
-            print(f"F1 score: {score}")
-            
-            # save part results
-            if use_gauss: Image.fromarray(out.astype(np.uint8)).save(join(gauss_path, elem_name + ".jpg")) # pyright: ignore[reportOptionalMemberAccess]
-            Image.fromarray(sobel.astype(np.uint8)).save(join(sobel_path, elem_name + ".jpg"))
-            Image.fromarray(supp.astype(np.uint8)).save(join(supp_path, elem_name + ".jpg"))
-            Image.fromarray(hysterisis.astype(np.uint8) * 255).save(join(hyst_path, elem_name + ".jpg"))
-            bar()
+    if predict:
+        with alive_bar(len(paths)) as bar:
+            results = {}
+            for i, path in enumerate(paths):
+                elem_name = basename(path).split(".")[0]
+                img = load_picture(path)
+                out = conv(img, build_gaussian_filter(5, 1.4)) if use_gauss else None
+                sobel, theta = sobel_apply(out if use_gauss else img)
+                supp = non_maximum_suppression(sobel, theta)
+                Th = supp.max() * 0.08
+                Tl = Th * 0.2
+                hysterisis = hysteresis_thresholding(supp, Tl, Th)
+                results[basename(path).split(".")[0]] = hysterisis
+                labels = contours[elem_name]
+                label = np.mean(labels, axis=0)
+                
+                # binary_label = (label > 0.5).astype(np.float32).reshape(-1,1)
+                # score = f1_score(binary_label, hysterisis.reshape(-1,1))
+                # f1_scores.append(score)
+                # print(f"F1 score: {score}")
+                
+                # save part results
+                if use_gauss: Image.fromarray(out.astype(np.uint8)).save(join(gauss_path, elem_name + ".jpg")) # pyright: ignore[reportOptionalMemberAccess]
+                Image.fromarray(sobel.astype(np.uint8)).save(join(sobel_path, elem_name + ".jpg"))
+                Image.fromarray(supp.astype(np.uint8)).save(join(supp_path, elem_name + ".jpg"))
+                Image.fromarray(hysterisis.astype(np.uint8) * 255).save(join(hyst_path, elem_name + ".jpg"))
+                bar()
+    
+    results = get_image_paths(hyst_path)
 
-    print("Done loading contours")
-    diffs, avg = calc_diffs(results, contours)
-    print("Diffs:")
-    print(diffs)
-    print("#" * 100)
-    print(f"Avg: {avg}")
+    f1_scores = []
+    f1_score_sum = 0
+    for path in results:
+
+        image_name = basename(path).split('.')[0]
+        result = Image.open(path).convert("L")
+        result = np.array(result) / 255
+        result = torch.sigmoid(torch.from_numpy(result)).reshape(-1,1)
+        result = (result > 0.5).float()
+        label = torch.from_numpy(contours[image_name]).reshape(-1,1)
+        # print(f"result shape {result.shape}, label shape: {label.shape}")
+        score = f1_score(label, result)
+        print(f"{image_name} F1 score: {score}")
+        f1_scores.append(score)
+        f1_score_sum += score
+
+    print(f"Avg F1 score: {f1_score_sum / len(results)}")
+    # print("Done loading contours")
+    # diffs, avg = calc_diffs(results, contours)
+    # print("Diffs:")
+    # print(diffs)
+    # print("#" * 100)
+    # print(f"Avg: {avg}")

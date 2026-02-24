@@ -267,7 +267,7 @@ def main(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    model = UNet(in_channels=3, out_channels=1, base=32).to(device)
+    model = UNet(in_channels=3, out_channels=1, base=64).to(device)
 
     if not args.predict:
         train_model(model, train_loader, val_loader, device, args.epochs, args.lr)
@@ -279,7 +279,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", type=str, default="./BSDS500-master/BSDS500/data")
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--predict", default=False, action='store_true')

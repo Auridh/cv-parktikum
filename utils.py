@@ -8,23 +8,27 @@ from os import walk, mkdir
 
 def load_contours(path):
     path = abspath(path)
-    contours = {}
 
+    contours = {}
     # iterate over .mat files
     for _, _, files in walk(path):
         for file in files:
             if file.endswith('.mat'):
                 muf = sio.loadmat(join(path, file))
                 mu = muf.get("groundTruth")
-                edges = []
-                _, n = mu.shape
-                for i in range(n):
-                    curr = mu[0,i]["Boundaries"][0,0]
-                    # edge = np.zeros_like(curr, dtype=bool)
-                    # edge[:-1, :] |= (curr[:-1, :] != curr[1:, :])
-                    # edge[:, :-1] |= (curr[:, :-1] != curr[:, 1:])
-                    edges.append(curr)
-                contours[basename(file).split('.')[0]] = edges
+                _, r = mu.shape
+
+                masks = [
+                    np.array(mu[0, i]["Boundaries"][0, 0], dtype=np.uint8)
+                    for i in range(r)
+                ]
+
+                combined = np.zeros_like(masks[0], dtype=np.uint8)
+                for m in masks:
+                    combined = np.logical_or(combined, m)
+
+                combined = combined.astype(np.float32)
+            contours[file.split('.')[0]] = combined
     return contours
 
 def get_image_paths(basePath):
