@@ -13,6 +13,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from sklearn.metrics import f1_score
+import matplotlib.pyplot as plt
 
 
 class ContourDataset(Dataset):
@@ -167,21 +168,34 @@ def weighted_bce_loss(pred, target, pos_weight):
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     return criterion(pred, target)
 
-def train_model(model, train_loader, val_loader, device, epochs, lr):
+def train_model(model, train_loader, val_loader, device, epochs, lr,
+                plot_dir="predictions/unet", threshold=0.5):
+
+    os.makedirs(plot_dir, exist_ok=True)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     model.to(device)
 
-    # compute positive weight dynamically
     pos_weight = compute_pos_weight(train_loader, device)
     print(f"Using pos_weight={pos_weight.item():.2f} for weighted BCE")
 
     best_val = float("inf")
 
+    train_losses = []
+    val_losses = []
+
+    train_f1_scores = []
+    val_f1_scores = []
+
     for epoch in range(epochs):
         model.train()
         train_loss = 0
 
+        all_train_preds = []
+        all_train_targets = []
+
         for imgs, masks in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+
             imgs, masks = imgs.to(device), masks.to(device)
 
             optimizer.zero_grad()
@@ -193,12 +207,33 @@ def train_model(model, train_loader, val_loader, device, epochs, lr):
 
             train_loss += loss.item()
 
+            probs = torch.sigmoid(outputs)
+            preds = (probs > threshold).float()
+
+            all_train_preds.append(preds.detach().cpu().view(-1))
+            all_train_targets.append(masks.detach().cpu().view(-1))
+
         train_loss /= len(train_loader)
-        val_loss = evaluate(model, val_loader, device, pos_weight)
 
-        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        # Train F1
+        all_train_preds = torch.cat(all_train_preds).numpy()
+        all_train_targets = torch.cat(all_train_targets).numpy()
+        train_f1 = f1_score(all_train_targets, all_train_preds)
 
-        # torch.save(model.state_dict(), f"model_epoch{epoch+1}.pth")
+        # Validation
+        val_loss, val_f1 = evaluate(model, val_loader, device, pos_weight, threshold)
+
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        train_f1_scores.append(train_f1)
+        val_f1_scores.append(val_f1)
+
+        print(f"Epoch {epoch+1}/{epochs} | "
+              f"Train Loss: {train_loss:.4f} | "
+              f"Val Loss: {val_loss:.4f} | "
+              f"Train F1: {train_f1:.4f} | "
+              f"Val F1: {val_f1:.4f}")
+
         if val_loss < best_val:
             best_val = val_loss
             torch.save(model.state_dict(), "best_model_unet.pth")
@@ -206,16 +241,62 @@ def train_model(model, train_loader, val_loader, device, epochs, lr):
 
     print("Training complete.")
 
+    # ------------------ LOSS PLOT ------------------
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_losses, label="Training Loss")
+    plt.plot(val_losses, label="Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("UNet Loss")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(plot_dir, "unet_loss.png"))
+    plt.close()
+
+    # ------------------ F1 PLOT ------------------
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_f1_scores, label="Training F1")
+    plt.plot(val_f1_scores, label="Validation F1")
+    plt.xlabel("Epoch")
+    plt.ylabel("F1 Score")
+    plt.title("UNet F1 Score")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(plot_dir, "unet_f1.png"))
+    plt.close()
+
+    print("Training curves saved.")
+
 @torch.no_grad()
-def evaluate(model, val_loader, device, pos_weight):
+def evaluate(model, loader, device, pos_weight, threshold=0.5):
     model.eval()
+
     total_loss = 0
-    for imgs, masks in val_loader:
+    all_preds = []
+    all_targets = []
+
+    for imgs, masks in loader:
         imgs, masks = imgs.to(device), masks.to(device)
+
         outputs = model(imgs)
+
         loss = weighted_bce_loss(outputs, masks, pos_weight) + dice_loss(outputs, masks)
         total_loss += loss.item()
-    return total_loss / len(val_loader)
+
+        probs = torch.sigmoid(outputs)
+        preds = (probs > threshold).float()
+
+        all_preds.append(preds.cpu().view(-1))
+        all_targets.append(masks.cpu().view(-1))
+
+    total_loss /= len(loader)
+
+    all_preds = torch.cat(all_preds).numpy()
+    all_targets = torch.cat(all_targets).numpy()
+
+    f1 = f1_score(all_targets, all_preds)
+
+    return total_loss, f1
 
 @torch.no_grad()
 def predict(model, dataset, loader, device, output_dir="predictions", threshold=0.5):
@@ -270,7 +351,10 @@ def main(args):
     model = UNet(in_channels=3, out_channels=1, base=64).to(device)
 
     if not args.predict:
-        train_model(model, train_loader, val_loader, device, args.epochs, args.lr)
+        train_model(model, train_loader, val_loader,
+            device, args.epochs, args.lr,
+            plot_dir="predictions/unet",
+            threshold=args.threshold)
 
     model.load_state_dict(torch.load("best_model_unet.pth"))
     predict(model, test_dataset, test_loader, device, "predictions/unet", threshold=args.threshold)
